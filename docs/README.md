@@ -1,17 +1,18 @@
-# Documentation
+# concave-resolver docs
 
-This repository contains the Phase 11 resolver scaffold for Gradient Linux.
+This directory tracks the public repository documentation for `concave-resolver`.
 
-## Key contracts
+## Start here
 
-- Unix socket: `/run/gradient/resolver.sock`
-- Snapshot store: `~/gradient/config/env-snapshots/`
-- Service entrypoint: `gradient-resolver run`
+- [README.md](../README.md) explains the daemon boundary, runtime paths, and local commands.
+- [CONTRIBUTING.md](../CONTRIBUTING.md) covers build, test, and review expectations.
 
-## Implementation notes
+## Runtime contract
 
-- Drift classification is pure and lives in `internal/resolver/diff.go`.
-- Snapshot persistence is atomic and lives in `internal/resolver/store.go`.
-- The scanner is intentionally mockable so tests do not need Docker.
-- The socket server speaks newline-delimited JSON over a Unix domain socket.
+- Default socket: `/run/gradient/resolver.sock`
+- Snapshot root: `~/gradient/config/env-snapshots/`
+- CLI entrypoints: `run`, `status`, `scan`
 
+## Scope
+
+`concave-resolver` owns environment snapshots and drift reporting. It does not manage Docker images, workspace layout, or GPU drivers.

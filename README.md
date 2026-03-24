@@ -1,44 +1,80 @@
 # concave-resolver
 
-`concave-resolver` is the environment intelligence daemon for Gradient Linux.
-It watches the Python package layer, stores environment snapshots, and exposes
-its state over a local Unix socket at `/run/gradient/resolver.sock`.
+Environment intelligence for Gradient Linux, delivered as a local Unix-socket daemon.
 
-## What is here
+## What it does
 
-- `internal/resolver/types.go` - shared contracts for snapshots, drift, and daemon status
-- `internal/resolver/diff.go` - pure drift classification and snapshot diff logic
-- `internal/resolver/store.go` - snapshot pathing, persistence, and lookup helpers
-- `internal/resolver/scanner.go` - mockable container scanner shell
-- `internal/resolver/socket.go` - Unix socket server and client helpers
-- `internal/resolver/service.go` - daemon loop skeleton
-- `scripts/gradient-resolver.service` - systemd unit file
+`concave-resolver` tracks Python package drift inside Gradient Linux workloads without taking over Docker lifecycle or GPU management. It scans container environments, stores snapshot history under the Gradient workspace, classifies package changes by drift tier, and exposes resolver state to `concave` over `/run/gradient/resolver.sock`.
 
-## Build
+## Requirements
+
+- Ubuntu 24.04 LTS
+- Go 1.25+
+- Docker Engine 26+
+- Access to the Gradient workspace at `~/gradient/`
+
+## Status
+
+`concave-resolver` is in development for Gradient Linux v0.2. The repository already contains the daemon loop, socket protocol, snapshot store, and drift classification logic. Release packaging and full production wiring are still in progress.
+
+## Configuration
+
+The daemon reads and writes inside the standard Gradient workspace:
+
+- Snapshots: `~/gradient/config/env-snapshots/`
+- Default socket: `/run/gradient/resolver.sock`
+
+The CLI also accepts runtime flags for local development:
+
+- `--workspace`
+- `--socket`
+- `--interval`
+- `--target group:container`
+
+## Architecture
+
+`concave-resolver` owns the Python environment layer only. It does not install Docker images, manage GPU drivers, or change suite topology. `concave` remains the control plane and queries resolver state over the local socket when environment status or drift reports are requested.
+
+## Development
+
+### Prerequisites
+
+Install Go 1.25 or newer and ensure Docker is available if you want to scan live containers.
+
+### Build
+
+```bash
+go build -o gradient-resolver .
+```
+
+### Test
 
 ```bash
 go test ./...
-go build ./...
 ```
 
-## Run
+### Run locally
 
 ```bash
-go run . run
+./gradient-resolver run --target research:gradient-neural-torch
+./gradient-resolver status
+./gradient-resolver scan --group research --container gradient-neural-torch
 ```
 
-The daemon starts a Unix socket server and performs periodic scan cycles for
-configured targets. Targets can be added on the command line for manual runs.
+### Repo layout
 
-## Snapshot store
+```text
+concave-resolver/
+  internal/resolver/   daemon loop, socket protocol, scanner, drift logic
+  scripts/             systemd unit file
+  docs/                repository docs
+  main.go              CLI entrypoint
+```
 
-Snapshots are written under:
+## Roadmap
 
-`~/gradient/config/env-snapshots/`
+The current line focuses on v0.2 environment drift detection, snapshot history, and resolver status reporting. Later work extends rollback depth, richer policy handling, and tighter integration with team-aware environment baselines.
 
-File names follow:
+## License
 
-`<group>.<RFC3339 timestamp>.lock`
-
-The `default` group is used when no group name is provided.
-
+License terms have not been published in this repository yet.
