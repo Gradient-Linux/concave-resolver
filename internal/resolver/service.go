@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,6 +48,9 @@ func DefaultWorkspaceRoot() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join(".", "gradient")
+	}
+	if filepath.Base(home) == "gradient" {
+		return home
 	}
 	return filepath.Join(home, "gradient")
 }
@@ -88,7 +93,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 // RunOnce performs one scan cycle and refreshes daemon status.
 func (s *Service) RunOnce(ctx context.Context) error {
-	reports := make([]DriftReport, 0, len(s.cfg.Targets))
+	reportsByGroup := make(map[string]DriftReport, len(s.cfg.Targets))
 	var scanErr error
 
 	for _, target := range s.cfg.Targets {
@@ -98,26 +103,17 @@ func (s *Service) RunOnce(ctx context.Context) error {
 			continue
 		}
 
-		previous, prevErr := PreviousSnapshot(s.cfg.WorkspaceRoot, target.Group)
-		if prevErr != nil {
-			reports = append(reports, DriftReport{
-				Group:     target.Group,
-				Timestamp: current.Timestamp,
-				Clean:     true,
-			})
-		} else {
-			diffs := DiffSnapshots(previous, current)
-			reports = append(reports, DriftReport{
-				Group:     target.Group,
-				Timestamp: current.Timestamp,
-				Diffs:     diffs,
-				Clean:     len(diffs) == 0,
-			})
-		}
-
 		if err := SaveSnapshot(s.cfg.WorkspaceRoot, current); err != nil {
 			scanErr = errors.Join(scanErr, fmt.Errorf("save snapshot for %s: %w", target.Group, err))
 		}
+	}
+
+	reports, reportErr := BuildStoredReports(s.cfg.WorkspaceRoot)
+	if reportErr != nil {
+		scanErr = errors.Join(scanErr, reportErr)
+	}
+	for _, report := range reports {
+		reportsByGroup[report.Group] = report
 	}
 
 	count, err := SnapshotCount(s.cfg.WorkspaceRoot)
@@ -128,7 +124,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	s.setStatus(ResolverStatus{
 		Running:       true,
 		LastScan:      time.Now().UTC(),
-		GroupReports:  reports,
+		GroupReports:  flattenReports(reportsByGroup),
 		SnapshotCount: count,
 		SocketPath:    s.cfg.SocketPath,
 	})
@@ -171,4 +167,101 @@ func (s *Service) setStatus(status ResolverStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status = status
+}
+
+// PromoteBaseline saves the current snapshot for a group as its active baseline.
+func (s *Service) PromoteBaseline(group, timestamp string) (Layer3Snapshot, error) {
+	return PromoteBaseline(s.cfg.WorkspaceRoot, group, timestamp)
+}
+
+// Baseline returns the promoted baseline snapshot for one group.
+func (s *Service) Baseline(group string) (Layer3Snapshot, error) {
+	return LoadBaseline(s.cfg.WorkspaceRoot, group)
+}
+
+func BuildStoredReports(workspaceRoot string) ([]DriftReport, error) {
+	groups, err := knownGroups(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	reports := make([]DriftReport, 0, len(groups))
+	for _, group := range groups {
+		current, err := LatestSnapshot(workspaceRoot, group)
+		if err != nil {
+			continue
+		}
+		baseline, baselineErr := LoadBaseline(workspaceRoot, group)
+		if baselineErr != nil {
+			baseline, baselineErr = PreviousSnapshot(workspaceRoot, group)
+		}
+		report := DriftReport{
+			Group:     group,
+			Timestamp: current.Timestamp,
+			Clean:     true,
+		}
+		if baselineErr == nil {
+			report.Diffs = DiffSnapshots(baseline, current)
+			report.Clean = len(report.Diffs) == 0
+		}
+		reports = append(reports, report)
+	}
+	sort.Slice(reports, func(i, j int) bool {
+		return reports[i].Group < reports[j].Group
+	})
+	return reports, nil
+}
+
+func knownGroups(workspaceRoot string) ([]string, error) {
+	set := map[string]struct{}{}
+
+	summaries, err := BaselineSummaries(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, summary := range summaries {
+		set[summary.Group] = struct{}{}
+	}
+
+	dir := filepath.Join(workspaceRoot, SnapshotDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read snapshot dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".lock" {
+			continue
+		}
+		parts := strings.SplitN(name, ".", 2)
+		if len(parts) < 2 || parts[0] == "" {
+			continue
+		}
+		set[parts[0]] = struct{}{}
+	}
+
+	groups := make([]string, 0, len(set))
+	for group := range set {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	return groups, nil
+}
+
+func flattenReports(items map[string]DriftReport) []DriftReport {
+	if len(items) == 0 {
+		return []DriftReport{}
+	}
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	reports := make([]DriftReport, 0, len(keys))
+	for _, key := range keys {
+		reports = append(reports, items[key])
+	}
+	return reports
 }

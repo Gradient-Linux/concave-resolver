@@ -1,22 +1,19 @@
 [Unit]
 Description=Gradient Linux Environment Intelligence Daemon
-After=docker.service network.target
-Requires=docker.service
+After=network.target
 
 [Service]
 Type=simple
 User=gradient-svc
 Group=gradient-svc
-WorkingDirectory=/home/gradient-svc/gradient
-ExecStart=/usr/local/bin/gradient-resolver run --workspace /home/gradient-svc/gradient --socket /run/gradient/resolver.sock
+WorkingDirectory=/var/lib/gradient
+ExecStart=/usr/local/bin/gradient-resolver run --workspace /var/lib/gradient --socket /run/gradient/resolver.sock
 Restart=on-failure
 RestartSec=10s
 RuntimeDirectory=gradient
 RuntimeDirectoryMode=0755
-SupplementaryGroups=docker
-ReadWritePaths=/run/gradient /home/gradient-svc/gradient
+ReadWritePaths=/run/gradient /var/lib/gradient
 UMask=0007
 
 [Install]
 WantedBy=multi-user.target
-

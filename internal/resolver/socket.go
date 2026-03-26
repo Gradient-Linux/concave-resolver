@@ -32,7 +32,7 @@ func ServeSocket(ctx context.Context, socketPath string, service *Service) error
 	defer listener.Close()
 	defer os.Remove(socketPath)
 
-	if err := os.Chmod(socketPath, 0o660); err != nil {
+	if err := os.Chmod(socketPath, 0o666); err != nil {
 		return fmt.Errorf("set socket mode: %w", err)
 	}
 
@@ -94,6 +94,38 @@ func QueryDrift(socketPath, group string) ([]DriftReport, error) {
 	return response.Payload, nil
 }
 
+// QueryBaseline returns the promoted baseline snapshot for one group.
+func QueryBaseline(socketPath, group string) (Layer3Snapshot, error) {
+	var response struct {
+		Type    string         `json:"type"`
+		Payload Layer3Snapshot `json:"payload"`
+		Error   string         `json:"error"`
+	}
+	if err := querySocket(socketPath, BaselineRequest{Type: "baseline_get", Group: group}, &response); err != nil {
+		return Layer3Snapshot{}, err
+	}
+	if response.Error != "" {
+		return Layer3Snapshot{}, errors.New(response.Error)
+	}
+	return response.Payload, nil
+}
+
+// ApplyBaseline promotes the latest or selected snapshot to the active baseline.
+func ApplyBaseline(socketPath, group, timestamp string) (Layer3Snapshot, error) {
+	var response struct {
+		Type    string         `json:"type"`
+		Payload Layer3Snapshot `json:"payload"`
+		Error   string         `json:"error"`
+	}
+	if err := querySocket(socketPath, ApplyBaselineRequest{Type: "baseline_set", Group: group, Timestamp: timestamp}, &response); err != nil {
+		return Layer3Snapshot{}, err
+	}
+	if response.Error != "" {
+		return Layer3Snapshot{}, errors.New(response.Error)
+	}
+	return response.Payload, nil
+}
+
 func handleConnection(conn net.Conn, service *Service) {
 	defer conn.Close()
 
@@ -109,7 +141,19 @@ func handleConnection(conn net.Conn, service *Service) {
 	case "drift":
 		_ = writeResponse(conn, Response{Type: "drift", Payload: service.DriftReports(request.Group)})
 	case "baseline_set":
-		_ = writeResponse(conn, Response{Type: "error", Error: "baseline promotion is not implemented in the scaffold"})
+		snapshot, err := service.PromoteBaseline(request.Group, request.Timestamp)
+		if err != nil {
+			_ = writeResponse(conn, Response{Type: "error", Error: err.Error()})
+			return
+		}
+		_ = writeResponse(conn, Response{Type: "baseline_set", Payload: snapshot})
+	case "baseline_get":
+		snapshot, err := service.Baseline(request.Group)
+		if err != nil {
+			_ = writeResponse(conn, Response{Type: "error", Error: err.Error()})
+			return
+		}
+		_ = writeResponse(conn, Response{Type: "baseline_get", Payload: snapshot})
 	default:
 		_ = writeResponse(conn, Response{Type: "error", Error: "unknown request type"})
 	}
@@ -152,6 +196,12 @@ func readRequest(conn net.Conn) (socketRequest, error) {
 			return socketRequest{}, fmt.Errorf("decode baseline request: %w", err)
 		}
 		return socketRequest{Type: request.Type, Group: request.Group, Timestamp: request.Timestamp}, nil
+	case "baseline_get":
+		var request BaselineRequest
+		if err := json.Unmarshal(line, &request); err != nil {
+			return socketRequest{}, fmt.Errorf("decode baseline get request: %w", err)
+		}
+		return socketRequest{Type: request.Type, Group: request.Group}, nil
 	default:
 		return socketRequest{}, fmt.Errorf("unknown request type %q", envelope.Type)
 	}

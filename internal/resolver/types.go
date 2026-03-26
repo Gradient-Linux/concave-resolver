@@ -90,6 +90,12 @@ type ApplyBaselineRequest struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// BaselineRequest asks the socket server for one promoted baseline.
+type BaselineRequest struct {
+	Type  string `json:"type"`
+	Group string `json:"group"`
+}
+
 // Response wraps all server-to-client messages.
 type Response struct {
 	Type    string `json:"type"`
